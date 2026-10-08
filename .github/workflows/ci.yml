@@ -36,7 +36,7 @@ jobs:
         with: {distribution: temurin, java-version: "21"}
       - uses: astral-sh/setup-uv@v6
         with: {version: "0.11.16"}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.ivy2.5.2
           key: ivy-${{ hashFiles('src/qcommerce/lakehouse/spark.py') }}
