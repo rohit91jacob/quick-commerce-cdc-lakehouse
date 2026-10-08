@@ -48,7 +48,7 @@ x-app: &app
 
 services:
   postgres:
-    image: postgres:17.11
+    image: postgres:18.4
     command: >
       postgres -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
       -c max_slot_wal_keep_size=2GB -c shared_buffers=128MB
@@ -64,7 +64,7 @@ services:
     mem_limit: 512m
 
   platform-db:
-    image: postgres:17.11
+    image: postgres:18.4
     environment:
       POSTGRES_PASSWORD: ${QC_PG_ADMIN_PASSWORD}
       ICEBERG_DB_PASSWORD: ${ICEBERG_DB_PASSWORD}
