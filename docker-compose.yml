@@ -150,7 +150,8 @@ services:
     depends_on:
       seaweedfs: {condition: service_healthy}
     entrypoint: ["/bin/sh", "-c"]
-    command: ["for i in $$(seq 1 30); do echo 's3.bucket.create -name warehouse' | weed shell -master=seaweedfs:9333 && exit 0; sleep 2; done; exit 1"]
+    # idempotent: succeeds when the bucket already exists
+    command: ["for i in $$(seq 1 30); do echo 's3.bucket.list' | weed shell -master=seaweedfs:9333 2>/dev/null | grep -qw warehouse && exit 0; echo 's3.bucket.create -name warehouse' | weed shell -master=seaweedfs:9333; sleep 2; done; exit 1"]
     restart: "no"
 
   trino:
