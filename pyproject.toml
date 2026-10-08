@@ -1,0 +1,90 @@
+[project]
+name = "quick-commerce-cdc-lakehouse"
+version = "0.1.0"
+description = "CDC lakehouse for quick-commerce data: Postgres -> Debezium -> Kafka -> Apache Iceberg -> Trino + dbt, orchestrated by Dagster."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10,<3.14"
+authors = [{ name = "rohit91jacob" }]
+keywords = ["cdc", "debezium", "kafka", "iceberg", "trino", "dbt", "dagster", "lakehouse"]
+dependencies = [
+  "pydantic>=2.8,<3",
+  "pydantic-settings>=2.4,<3",
+]
+
+[project.optional-dependencies]
+# Synthetic OLTP workload generator.
+generator = [
+  "numpy>=1.26,<3",
+  "psycopg[binary]>=3.2,<4",
+]
+# Everything except Spark: generator, CDC tooling, reconciliation, maintenance, Dagster + dbt.
+app = [
+  "quick-commerce-cdc-lakehouse[generator]",
+  "confluent-kafka>=2.5,<3",
+  "requests>=2.32,<3",
+  "trino>=0.330,<1",
+  "dagster==1.13.25",
+  "dagster-webserver==1.13.25",
+  "dagster-postgres==0.29.25",
+  "dagster-dbt==0.29.25",
+  "dbt-core>=1.10,<1.11",
+  "dbt-trino>=1.10,<1.11",
+]
+# The streaming writer. The container image gets PySpark from the apache/spark base image instead.
+spark = ["pyspark==4.1.3"]
+
+[project.scripts]
+qc = "qcommerce.cli:main"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-timeout>=2.3",
+  "ruff==0.16.10",
+  "pyspark==4.1.3",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qcommerce"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+src = ["src", "tests"]
+extend-exclude = ["dbt/target", "dbt/dbt_packages"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "C4", "RUF", "PL", "PT", "S"]
+ignore = [
+  "PLR0913", # simulation/event handlers legitimately take many parameters
+  "PLR2004", # magic values are domain constants (probabilities, minutes) documented inline
+  "S608",    # SQL is built from identifiers we control, never from user input
+  "S311",    # the generator's RNG is for synthetic data, not cryptography
+  "PLR0915",
+  "PLR0912",
+  "PLR0911",
+  "PLR0917",
+  "PLC0415", # heavy optional dependencies (Spark, Dagster) are imported lazily on purpose
+  "E501",    # `ruff format` owns line length; long string literals are left alone
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "S105", "S106", "PT018", "RUF043", "S608"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "spark: needs a JVM plus the Spark/Iceberg jars (downloaded on first run)",
+  "integration: needs running services (PostgreSQL)",
+]
+timeout = 900
