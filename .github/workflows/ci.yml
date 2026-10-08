@@ -17,7 +17,7 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with: {version: "0.11.16"}
       - run: uv sync --frozen --extra app --python 3.12
@@ -31,7 +31,7 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
         with: {distribution: temurin, java-version: "21"}
       - uses: astral-sh/setup-uv@v6
@@ -58,7 +58,7 @@ jobs:
       QC_PG_HOST: localhost
       QC_PG_ADMIN_PASSWORD: postgres
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
         with: {version: "0.11.16"}
       - run: uv sync --frozen --extra app --python 3.12
@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: build images (app + writer)
         run: cp .env.example .env && docker compose build writer tools
       - name: end-to-end (compose)
