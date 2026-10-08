@@ -1,0 +1,250 @@
+# Full stack: Postgres (OLTP) -> Debezium (Kafka Connect) -> Kafka -> Spark writer -> Iceberg on SeaweedFS
+# (JDBC catalog in the platform Postgres) -> Trino -> dbt, orchestrated by Dagster.
+#
+#   cp .env.example .env
+#   docker compose up -d --build --wait          # infrastructure + writer + Dagster
+#   make bootstrap                               # migrate, seed, register the connector
+#   docker compose --profile demo up -d generator
+#
+# Resource-light defaults (fits a 16 GB machine / a GitHub-hosted runner).
+
+x-app-env: &app-env
+  QC_LOG_LEVEL: ${QC_LOG_LEVEL:-INFO}
+  QC_PG_HOST: postgres
+  QC_PG_PORT: "5432"
+  QC_PG_DATABASE: qcommerce
+  QC_PG_ADMIN_USER: postgres
+  QC_PG_ADMIN_PASSWORD: ${QC_PG_ADMIN_PASSWORD}
+  QC_PG_APP_PASSWORD: ${QC_PG_APP_PASSWORD}
+  QC_PG_DEBEZIUM_PASSWORD: ${QC_PG_DEBEZIUM_PASSWORD}
+  QC_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  QC_CONNECT_URL: http://connect:8083
+  QC_CONNECT_DB_HOST: postgres
+  QC_CONNECT_DB_PORT: "5432"
+  QC_TRINO_HOST: trino
+  QC_TRINO_PORT: "8080"
+  QC_LAKE_CATALOG_URI: jdbc:postgresql://platform-db:5432/iceberg_catalog
+  QC_LAKE_CATALOG_PASSWORD: ${ICEBERG_DB_PASSWORD}
+  QC_LAKE_S3_ENDPOINT: http://seaweedfs:8333
+  QC_LAKE_S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  QC_LAKE_S3_SECRET_KEY: ${S3_SECRET_KEY}
+  QC_WRITER_METRICS_URL: http://writer:9405
+  QC_GEN_SEED: ${QC_GEN_SEED:-42}
+  DAGSTER_HOME: /opt/dagster
+  DAGSTER_PG_HOST: platform-db
+  DAGSTER_PG_USER: dagster
+  DAGSTER_PG_PASSWORD: ${DAGSTER_DB_PASSWORD}
+  DAGSTER_PG_DB: dagster
+  DBT_TARGET: ${DBT_TARGET:-dev}
+
+x-app: &app
+  image: qcommerce-app:${QC_IMAGE_TAG:-local}
+  build: {context: ., dockerfile: docker/Dockerfile, target: app}
+  environment: *app-env
+  volumes:
+    - ./infra/dagster/dagster.yaml:/opt/dagster/dagster.yaml:ro
+    - ./infra/dagster/workspace.yaml:/opt/dagster/workspace.yaml:ro
+    - ./reports:/reports
+
+services:
+  postgres:
+    image: postgres:17.11
+    command: >
+      postgres -c wal_level=logical -c max_replication_slots=10 -c max_wal_senders=10
+      -c max_slot_wal_keep_size=2GB -c shared_buffers=128MB
+    environment:
+      POSTGRES_PASSWORD: ${QC_PG_ADMIN_PASSWORD}
+      POSTGRES_DB: qcommerce
+    ports: ["${QC_PG_HOST_PORT:-5432}:5432"]
+    volumes: [oltp-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d qcommerce"]
+      interval: 5s
+      retries: 20
+    mem_limit: 512m
+
+  platform-db:
+    image: postgres:17.11
+    environment:
+      POSTGRES_PASSWORD: ${QC_PG_ADMIN_PASSWORD}
+      ICEBERG_DB_PASSWORD: ${ICEBERG_DB_PASSWORD}
+      DAGSTER_DB_PASSWORD: ${DAGSTER_DB_PASSWORD}
+    volumes:
+      - platform-data:/var/lib/postgresql/data
+      - ./infra/platform-db/init.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -tAc \"select 1 from pg_database where datname='dagster'\" | grep -q 1"]
+      interval: 5s
+      retries: 20
+    mem_limit: 384m
+
+  kafka:
+    image: apache/kafka:4.3.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx768m
+    volumes: [kafka-data:/var/lib/kafka/data]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      retries: 20
+    mem_limit: 1g
+
+  connect:
+    image: quay.io/debezium/connect:3.7.0.Final
+    depends_on:
+      kafka: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: qc-connect
+      CONFIG_STORAGE_TOPIC: _qc_connect_configs
+      OFFSET_STORAGE_TOPIC: _qc_connect_offsets
+      STATUS_STORAGE_TOPIC: _qc_connect_status
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "true"
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "true"
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: "5000"
+      CONNECT_CONNECTOR_CLIENT_CONFIG_OVERRIDE_POLICY: All
+      HEAP_OPTS: -Xms256m -Xmx768m
+    ports: ["${QC_CONNECT_HOST_PORT:-8083}:8083"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:8083/connector-plugins >/dev/null"]
+      interval: 10s
+      retries: 30
+    mem_limit: 1g
+
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.48
+    entrypoint: ["/bin/sh", "/entrypoint-qc.sh"]
+    environment:
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    volumes:
+      - s3-data:/data
+      - ./infra/seaweedfs/entrypoint.sh:/entrypoint-qc.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9333/cluster/status && nc -z localhost 8333"]
+      interval: 5s
+      retries: 30
+    mem_limit: 512m
+
+  s3-init:
+    image: chrislusf/seaweedfs:4.48
+    depends_on:
+      seaweedfs: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["for i in $$(seq 1 30); do echo 's3.bucket.create -name warehouse' | weed shell -master=seaweedfs:9333 && exit 0; sleep 2; done; exit 1"]
+    restart: "no"
+
+  trino:
+    image: trinodb/trino:483
+    depends_on:
+      platform-db: {condition: service_healthy}
+      seaweedfs: {condition: service_healthy}
+    environment:
+      ICEBERG_DB_PASSWORD: ${ICEBERG_DB_PASSWORD}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+    volumes:
+      - ./infra/trino/catalog:/etc/trino/catalog:ro
+      - ./infra/trino/jvm.config:/etc/trino/jvm.config:ro
+      - ./infra/trino/config.properties:/etc/trino/config.properties:ro
+    ports: ["${QC_TRINO_HOST_PORT:-8080}:8080"]
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/lib/trino/bin/health-check"]
+      interval: 10s
+      retries: 30
+    mem_limit: 2g
+
+  db-migrate:
+    <<: *app
+    depends_on:
+      postgres: {condition: service_healthy}
+    command: ["db", "migrate", "--target", "1"]
+    restart: "no"
+
+  writer:
+    image: qcommerce-writer:${QC_IMAGE_TAG:-local}
+    build: {context: ., dockerfile: docker/Dockerfile, target: writer}
+    depends_on:
+      kafka: {condition: service_healthy}
+      platform-db: {condition: service_healthy}
+      s3-init: {condition: service_completed_successfully}
+    environment:
+      <<: *app-env
+      QC_WRITER_SPARK_MASTER: local[2]
+      QC_WRITER_DRIVER_MEMORY: 1536m
+      QC_WRITER_SHUFFLE_PARTITIONS: "4"
+      QC_WRITER_TRIGGER_SECONDS: "10"
+    volumes: [writer-checkpoints:/data/checkpoints]
+    ports: ["${QC_WRITER_HOST_PORT:-9405}:9405"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:9405/healthz', timeout=3)\""]
+      interval: 15s
+      start_period: 120s
+      retries: 10
+    mem_limit: 2500m
+
+  dagster-webserver:
+    <<: *app
+    depends_on:
+      platform-db: {condition: service_healthy}
+      trino: {condition: service_healthy}
+    entrypoint: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000", "-w", "/opt/dagster/workspace.yaml"]
+    command: []
+    ports: ["${QC_DAGSTER_HOST_PORT:-3000}:3000"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:3000/server_info', timeout=3)\""]
+      interval: 15s
+      start_period: 60s
+      retries: 10
+    mem_limit: 768m
+
+  dagster-daemon:
+    <<: *app
+    depends_on:
+      platform-db: {condition: service_healthy}
+      trino: {condition: service_healthy}
+    entrypoint: ["dagster-daemon", "run", "-w", "/opt/dagster/workspace.yaml"]
+    command: []
+    restart: unless-stopped
+    mem_limit: 768m
+
+  generator:
+    <<: *app
+    profiles: [demo]
+    depends_on:
+      postgres: {condition: service_healthy}
+    command: ["generator", "run", "--backfill-hours", "${QC_DEMO_BACKFILL_HOURS:-24}", "--live-minutes", "-1"]
+    restart: unless-stopped
+
+  # One-off commands: docker compose run --rm tools <qc subcommand>
+  tools:
+    <<: *app
+    profiles: [tools]
+    restart: "no"
+
+volumes:
+  oltp-data:
+  platform-data:
+  kafka-data:
+  s3-data:
+  writer-checkpoints:

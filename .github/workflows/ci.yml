@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.11.16"}
+      - run: uv sync --frozen --extra app --python 3.12
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - name: dbt parse (project compiles without a warehouse)
+        run: cd dbt && DBT_PROFILES_DIR=. uv run dbt parse
+      - name: Dagster definitions load
+        run: DBT_PROFILES_DIR=dbt QC_SCHEDULES_ON=0 uv run dagster definitions validate -m qcommerce.orchestration.definitions
+
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: {distribution: temurin, java-version: "21"}
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.11.16"}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ivy2.5.2
+          key: ivy-${{ hashFiles('src/qcommerce/lakehouse/spark.py') }}
+      - run: uv sync --frozen --extra app --python 3.12
+      - name: unit + Spark/Iceberg writer tests
+        run: uv run pytest tests/unit tests/spark -v
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.11
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 20
+    env:
+      QC_PG_HOST: localhost
+      QC_PG_ADMIN_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+        with: {version: "0.11.16"}
+      - run: uv sync --frozen --extra app --python 3.12
+      - run: uv run pytest -m integration tests/integration -v
+
+  e2e:
+    needs: [lint, unit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - name: build images (app + writer)
+        run: cp .env.example .env && docker compose build writer tools
+      - name: end-to-end (compose)
+        run: ./scripts/e2e.sh
+      - name: container logs
+        if: failure()
+        run: docker compose logs --no-color --tail=400 > reports/compose.log; tail -n 300 reports/compose.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-reports
+          path: reports/
+          if-no-files-found: ignore
