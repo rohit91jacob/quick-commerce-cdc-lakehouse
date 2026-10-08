@@ -1,0 +1,24 @@
+# Connection settings come from the same QC_TRINO_* variables as the rest of the stack.
+qcommerce:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: trino
+      method: none
+      user: "{{ env_var('QC_TRINO_USER', 'dbt') }}"
+      host: "{{ env_var('QC_TRINO_HOST', 'localhost') }}"
+      port: "{{ env_var('QC_TRINO_PORT', '8080') | as_number }}"
+      database: "{{ env_var('QC_TRINO_CATALOG', 'lakehouse') }}"
+      schema: gold
+      threads: 4
+      http_scheme: http
+    ci:
+      type: trino
+      method: none
+      user: "{{ env_var('QC_TRINO_USER', 'dbt') }}"
+      host: "{{ env_var('QC_TRINO_HOST', 'localhost') }}"
+      port: "{{ env_var('QC_TRINO_PORT', '8080') | as_number }}"
+      database: "{{ env_var('QC_TRINO_CATALOG', 'lakehouse') }}"
+      schema: gold
+      threads: 4
+      http_scheme: http

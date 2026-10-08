@@ -1,0 +1,96 @@
+version: 2
+
+models:
+  - name: dim_store
+    description: Current dark stores with their city.
+    columns:
+      - name: store_id
+        tests: [unique, not_null]
+      - name: status
+        tests:
+          - accepted_values: {arguments: {values: [active, paused, closed]}}
+
+  - name: dim_product
+    description: Current catalogue with category and live discount rate.
+    columns:
+      - name: product_id
+        tests: [unique, not_null]
+      - name: discount_rate
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+
+  - name: dim_product_price_history
+    description: Type-2 price history per product (one row per price version, from the CDC change log).
+    tests:
+      - scd2_valid_intervals: {arguments: {key_column: product_id}}
+    columns:
+      - name: product_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: ref('dim_product'), field: product_id}}
+      - name: selling_price
+        tests: [not_null, non_negative]
+
+  - name: dim_store_history
+    description: Type-2 history of store catchment radius, picker capacity and status.
+    tests:
+      - scd2_valid_intervals: {arguments: {key_column: store_id}}
+    columns:
+      - name: store_id
+        tests: [not_null]
+
+  - name: dim_customer
+    description: Customers with first/last order and weekly acquisition cohort.
+    columns:
+      - name: customer_id
+        tests: [unique, not_null]
+
+  - name: fct_orders
+    description: One row per order with lifecycle durations, money and SLA outcome. Incremental (delete+insert).
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: store_id
+        tests:
+          - relationships: {arguments: {to: ref('dim_store'), field: store_id}}
+      - name: customer_id
+        tests:
+          - relationships: {arguments: {to: ref('dim_customer'), field: customer_id}}
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: [placed, accepted, picking, packed, out_for_delivery, delivered, cancelled]
+      - name: total
+        tests: [not_null, non_negative]
+      - name: delivery_minutes
+        tests: [non_negative]
+
+  - name: fct_order_items
+    description: Surviving order lines (lines removed at picking are excluded). Incremental by order.
+    columns:
+      - name: order_item_id
+        tests: [unique, not_null]
+      - name: order_id
+        tests:
+          - relationships: {arguments: {to: ref('fct_orders'), field: order_id}}
+      - name: quantity
+        tests: [not_null, non_negative]
+
+unit_tests:
+  - name: price_history_ignores_duplicates_and_non_price_updates
+    description: >
+      Change events arrive out of order and one is duplicated; an update that only flips is_active is not a
+      new price version. Versions follow LSN order regardless of arrival.
+    model: dim_product_price_history
+    given:
+      - input: ref('stg_products__changes')
+        rows:
+          - {product_id: 1, mrp: 100.00, selling_price: 90.00, updated_at: "2026-09-01 10:00:00 UTC", _lsn: 300}
+          - {product_id: 1, mrp: 100.00, selling_price: 95.00, updated_at: "2026-09-01 08:00:00 UTC", _lsn: 100}
+          - {product_id: 1, mrp: 100.00, selling_price: 95.00, updated_at: "2026-09-01 09:00:00 UTC", _lsn: 200}
+          - {product_id: 1, mrp: 100.00, selling_price: 90.00, updated_at: "2026-09-01 10:00:00 UTC", _lsn: 300}
+    expect:
+      rows:
+        - {product_id: 1, version: 1, selling_price: 95.00, valid_from: "2026-09-01 08:00:00 UTC", valid_to: "2026-09-01 10:00:00 UTC", is_current: false}
+        - {product_id: 1, version: 2, selling_price: 90.00, valid_from: "2026-09-01 10:00:00 UTC", valid_to: null, is_current: true}

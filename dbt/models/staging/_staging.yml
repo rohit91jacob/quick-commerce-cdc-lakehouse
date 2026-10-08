@@ -1,0 +1,27 @@
+version: 2
+
+models:
+  - name: stg_orders
+    description: Live orders from silver. `tip_amount` arrives with source migration V002 (null until then).
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+  - name: stg_order_items
+    columns:
+      - name: order_item_id
+        tests: [unique, not_null]
+  - name: stg_inventory
+    tests:
+      - unique:
+          column_name: "cast(store_id as varchar) || '-' || cast(product_id as varchar)"
+    columns:
+      - name: on_hand
+        tests: [non_negative]
+  - name: stg_payments
+    columns:
+      - name: order_id
+        tests: [unique]
+  - name: stg_products__changes
+    description: Every captured version of a product row (deduplicated per key, LSN and op).
+  - name: stg_inventory__changes
+    description: Inventory change log including deletes (delisted SKUs).

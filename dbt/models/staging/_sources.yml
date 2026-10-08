@@ -1,0 +1,59 @@
+version: 2
+
+sources:
+  - name: silver
+    description: Current state of the OLTP tables, maintained by the CDC writer (deletes are tombstoned).
+    schema: silver
+    loaded_at_field: _ingested_at
+    freshness:
+      warn_after: {count: 30, period: minute}
+      error_after: {count: 6, period: hour}
+    tables:
+      - name: cities
+        description: City reference data.
+        freshness: null
+      - name: dark_stores
+        description: Dark stores (micro-fulfilment centres).
+      - name: categories
+        description: Catalogue categories.
+        freshness: null
+      - name: products
+        description: SKUs with current MRP and selling price.
+      - name: customers
+        description: Customer accounts.
+      - name: customer_addresses
+        description: Delivery addresses (hard-deleted when removed).
+      - name: inventory
+        description: Stock on hand per store and SKU (rows deleted when a SKU is delisted).
+      - name: promotions
+        description: Promo codes (expired flash promos are hard-deleted).
+        freshness: null
+      - name: riders
+        description: Delivery riders.
+      - name: rider_shifts
+        description: Rider log-in/log-out shifts.
+      - name: orders
+        description: Customer orders and their lifecycle timestamps.
+      - name: order_items
+        description: Order lines (deleted when an item is unavailable at picking).
+      - name: order_status_history
+        description: Append-only status transitions.
+      - name: delivery_assignments
+        description: Rider assignment per order.
+      - name: payments
+        description: One payment per order.
+      - name: refunds
+        description: Refunds (cancellations, missing items, late deliveries).
+
+  - name: bronze
+    description: Append-only CDC change logs (one row per change event).
+    schema: bronze
+    tables:
+      - name: products
+        description: Change log of commerce.products.
+      - name: dark_stores
+        description: Change log of commerce.dark_stores.
+      - name: inventory
+        description: Change log of commerce.inventory.
+      - name: order_items
+        description: Change log of commerce.order_items.

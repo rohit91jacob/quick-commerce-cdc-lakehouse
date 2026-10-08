@@ -1,0 +1,61 @@
+version: 2
+
+models:
+  - name: mart_order_funnel_daily
+    description: Orders reaching each lifecycle stage, and cancellations by reason, per store and IST day.
+    columns:
+      - name: placed_to_delivered_rate
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+
+  - name: mart_delivery_sla_hourly
+    description: Delivery time distribution (P50/P90) and share within the promise, per store, day and IST hour.
+    columns:
+      - name: pct_within_promise
+        tests:
+          - not_null
+          - between: {arguments: {min_value: 0, max_value: 1}}
+      - name: p90_delivery_minutes
+        tests: [non_negative]
+
+  - name: mart_inventory_health_daily
+    description: Stock-out events, stock-out rate and estimated lost sales per store and day.
+    columns:
+      - name: stockout_rate
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+      - name: estimated_lost_sales
+        tests: [non_negative]
+
+  - name: mart_basket_daily
+    description: GMV, discounts, refunds, net revenue, AOV and basket size per city and day.
+    columns:
+      - name: average_order_value
+        tests: [not_null, non_negative]
+
+  - name: mart_category_mix_daily
+    description: Units, revenue and revenue share per category and day.
+    columns:
+      - name: revenue_share
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+
+  - name: mart_customer_retention_weekly
+    description: Weekly acquisition cohorts and the share of each cohort active N weeks later.
+    columns:
+      - name: retention_rate
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+
+  - name: mart_rider_utilisation_daily
+    description: Logged-in vs busy minutes, deliveries and deliveries per hour per rider and day.
+    columns:
+      - name: utilisation
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+
+  - name: mart_promo_effectiveness
+    description: Orders, discount cost, basket uplift and first orders per promo code.
+    columns:
+      - name: promo_code
+        tests: [unique, not_null]
