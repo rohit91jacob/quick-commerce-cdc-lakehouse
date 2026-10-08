@@ -17,8 +17,8 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with: {version: "0.11.16"}
       - run: uv sync --frozen --extra app --python 3.12
       - run: uv run ruff check src tests
@@ -31,12 +31,12 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with: {distribution: temurin, java-version: "21"}
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v7
         with: {version: "0.11.16"}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.ivy2.5.2
           key: ivy-${{ hashFiles('src/qcommerce/lakehouse/spark.py') }}
@@ -58,8 +58,8 @@ jobs:
       QC_PG_HOST: localhost
       QC_PG_ADMIN_PASSWORD: postgres
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
         with: {version: "0.11.16"}
       - run: uv sync --frozen --extra app --python 3.12
       - run: uv run pytest -m integration tests/integration -v
@@ -69,15 +69,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: build images (app + writer)
         run: cp .env.example .env && docker compose build writer tools
       - name: end-to-end (compose)
         run: ./scripts/e2e.sh
       - name: container logs
         if: failure()
-        run: docker compose logs --no-color --tail=400 > reports/compose.log; tail -n 300 reports/compose.log
-      - uses: actions/upload-artifact@v4
+        run: mkdir -p reports && docker compose logs --no-color --tail=400 > reports/compose.log; tail -n 300 reports/compose.log
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: e2e-reports

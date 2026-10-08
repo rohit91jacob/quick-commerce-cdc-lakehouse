@@ -27,6 +27,8 @@ CMD ["--help"]
 # --------------------------------------------------------------------------------------------- writer
 FROM ${SPARK_IMAGE} AS writer
 USER root
+# Newer distro Pythons mark the system interpreter as externally managed (PEP 668); older pips ignore this.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 ARG ICEBERG_VERSION=1.12.0
 ARG SPARK_VERSION=4.1.3
 # Runtime jars from Maven Central, each verified against its published SHA-1.
@@ -42,10 +44,10 @@ RUN python3 /tmp/fetch_jars.py /opt/spark/jars \
     && rm /tmp/fetch_jars.py \
     && ln -s "$(ls /opt/spark/python/lib/py4j-*-src.zip)" /opt/spark/python/lib/py4j-src.zip
 RUN (python3 -m pip --version >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends python3-pip && rm -rf /var/lib/apt/lists/*)) \
-    && python3 -m pip install --no-cache-dir --break-system-packages "pydantic>=2.8,<3" "pydantic-settings>=2.4,<3"
+    && python3 -m pip install --no-cache-dir "pydantic>=2.8,<3" "pydantic-settings>=2.4,<3"
 COPY pyproject.toml README.md LICENSE /opt/qcommerce/
 COPY src /opt/qcommerce/src
-RUN python3 -m pip install --no-cache-dir --break-system-packages --no-deps /opt/qcommerce \
+RUN python3 -m pip install --no-cache-dir --no-deps /opt/qcommerce \
     && mkdir -p /data/checkpoints && chown -R spark /data
 ENV PYTHONPATH=/opt/spark/python:/opt/spark/python/lib/py4j-src.zip \
     QC_WRITER_CHECKPOINT_LOCATION=/data/checkpoints/cdc-writer \
