@@ -45,6 +45,7 @@ def run(
     live_minutes: float | None = 0.0,
     rate_multiplier: float = 1.0,
     schema_change_after_minutes: float | None = None,
+    catch_up_hours: float | None = None,
 ) -> dict[str, int]:
     """Simulate ``backfill_hours`` of history as fast as possible, then run live in wall-clock time.
 
@@ -61,6 +62,13 @@ def run(
         world = load_world(conn, cfg)
         has_orders = conn.execute("SELECT EXISTS (SELECT 1 FROM commerce.orders)").fetchone()[0]
         conn.commit()
+        if catch_up_hours:
+            # Scheduled refreshes: simulate the gap since the last order (capped), as fast as possible.
+            last = conn.execute("SELECT max(placed_at) FROM commerce.orders").fetchone()[0]
+            gap_hours = (_now() - last).total_seconds() / 3600 if last else catch_up_hours
+            backfill_hours = max(0.0, min(catch_up_hours, gap_hours))
+            has_orders = False
+            logger.info("catch-up", extra={"last_order_at": str(last), "hours": round(backfill_hours, 2)})
         if backfill_hours and has_orders:
             logger.warning("orders already exist; skipping backfill and continuing live")
             backfill_hours = 0.0

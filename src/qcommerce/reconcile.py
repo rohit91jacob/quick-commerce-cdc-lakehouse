@@ -116,8 +116,18 @@ def compare_table(
     columns = _source_columns(pg, schema, table)
     lake_cols = _lake_columns(tconn, silver, table)
     result = TableResult(table, True, 0, 0)
+    if not columns:
+        # Optional tables (e.g. V003's market data before the migration ran) are skipped.
+        result.warnings.append("table does not exist at the source (migration not applied)")
+        return result
     if not lake_cols:
+        source_rows = pg.execute(f'SELECT count(*) FROM {schema}."{table}"').fetchone()[0]
+        if source_rows == 0:
+            # Debezium creates a topic (and the writer a silver table) only on the first change.
+            result.warnings.append("empty at the source and not yet in silver")
+            return result
         result.ok = False
+        result.rows_source = int(source_rows)
         result.mismatches.append("silver table does not exist")
         return result
     shared = [(c, t) for c, t in columns if c in lake_cols]

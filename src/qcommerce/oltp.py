@@ -19,6 +19,11 @@ PRIMARY_KEYS: dict[str, tuple[str, ...]] = {
     "delivery_assignments": ("assignment_id",),
     "payments": ("payment_id",),
     "refunds": ("refund_id",),
+    # V003: real public market data (Open Prices, Agmarknet).
+    "market_locations": ("location_id",),
+    "market_products": ("market_product_id",),
+    "market_prices": ("price_id",),
+    "mandi_prices": ("state", "district", "market", "commodity", "variety", "grade", "arrival_date"),
 }
 
 BUSINESS_TABLES: tuple[str, ...] = tuple(PRIMARY_KEYS)

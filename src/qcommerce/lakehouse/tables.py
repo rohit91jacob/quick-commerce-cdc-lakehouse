@@ -20,6 +20,10 @@ LOAD_ORDER: tuple[str, ...] = (
     "delivery_assignments",
     "order_status_history",
     "refunds",
+    "market_locations",
+    "market_products",
+    "market_prices",
+    "mandi_prices",
     "cdc_heartbeat",
 )
 
@@ -35,6 +39,7 @@ SILVER_PARTITIONING: dict[str, str] = {
     "payments": "bucket(4, payment_id)",
     "delivery_assignments": "bucket(4, assignment_id)",
     "inventory": "bucket(4, store_id)",
+    "market_prices": "bucket(4, price_id)",
 }
 
 # Bronze change logs are append-mostly and queried by time.

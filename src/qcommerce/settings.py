@@ -124,6 +124,8 @@ class GeneratorSettings(BaseSettings):
     cities: int = 2
     stores_per_city: int = 3
     products: int = 320
+    # Fill the catalogue with real Open Food Facts products where the committed snapshot has them.
+    real_catalogue: bool = True
     customers: int = 2500
     riders_per_store: int = 28
     base_orders_per_store_hour: float = 24.0

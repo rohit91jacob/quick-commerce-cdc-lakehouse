@@ -36,6 +36,7 @@ def _generator(args: argparse.Namespace) -> int:
         summary = runner.run(
             settings,
             backfill_hours=args.backfill_hours,
+            catch_up_hours=args.catch_up_hours,
             live_minutes=None if args.live_minutes < 0 else args.live_minutes,
             rate_multiplier=args.rate_multiplier,
             schema_change_after_minutes=args.schema_change_after_minutes,
@@ -147,6 +148,40 @@ def _ops(args: argparse.Namespace) -> int:
     return 2
 
 
+def _realdata(args: argparse.Namespace) -> int:
+    from qcommerce.realdata import catalogue, sync
+
+    if args.action == "catalogue-snapshot":
+        default = Path(catalogue.__file__).with_name(catalogue.SNAPSHOT)
+        print(json.dumps(catalogue.build_snapshot(Path(args.out) if args.out else default)))
+        return 0
+    fixtures = None
+    if args.fixtures == "bundled":  # the real sample pages shipped with the package (CI, offline demos)
+        from importlib import resources
+
+        fixtures = Path(str(resources.files("qcommerce.realdata").joinpath("fixtures")))
+    elif args.fixtures:
+        fixtures = Path(args.fixtures)
+    summary = sync.sync(
+        get_settings(),
+        fixtures=fixtures,
+        backfill_days=args.backfill_days,
+        max_pages=args.max_pages,
+    )
+    text = json.dumps(summary, default=str, indent=2)
+    if args.report:
+        Path(args.report).write_text(text, encoding="utf-8")
+    print(text)
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    from qcommerce import site
+
+    print(site.build(get_settings(), Path(args.out)))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="qc", description="Quick-commerce CDC lakehouse")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -161,6 +196,12 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--backfill-hours", type=float, default=0.0)
     gen.add_argument("--live-minutes", type=float, default=0.0, help="-1 runs forever")
     gen.add_argument("--rate-multiplier", type=float, default=1.0)
+    gen.add_argument(
+        "--catch-up-hours",
+        type=float,
+        default=None,
+        help="simulate the time since the last order (at most this many hours), then stop or go live",
+    )
     gen.add_argument(
         "--schema-change-after-minutes",
         type=float,
@@ -194,6 +235,23 @@ def build_parser() -> argparse.ArgumentParser:
     mnt.add_argument("--file-size-threshold", default="64MB")
     mnt.add_argument("--purge-tombstones-days", type=int, default=None)
     mnt.set_defaults(func=_maintenance)
+
+    real = sub.add_parser("realdata", help="real public data: Open Food Facts, Open Prices, Agmarknet")
+    real.add_argument("action", choices=["sync", "catalogue-snapshot"])
+    real.add_argument(
+        "--fixtures",
+        default=None,
+        help="for `sync`: read Open Prices pages from this directory (`bundled`: the packaged sample)",
+    )
+    real.add_argument("--backfill-days", type=float, default=14.0, help="first-run history to fetch")
+    real.add_argument("--max-pages", type=int, default=150, help="Open Prices pages per run (100 rows each)")
+    real.add_argument("--out", default=None, help="for `catalogue-snapshot`: output path")
+    real.add_argument("--report", default=None, help="for `sync`: write the JSON summary here")
+    real.set_defaults(func=_realdata)
+
+    rpt = sub.add_parser("report", help="render the static results site from the gold marts")
+    rpt.add_argument("--out", default="site")
+    rpt.set_defaults(func=_report)
 
     ops = sub.add_parser("ops", help="health checks and utilities")
     ops.add_argument("action", choices=["status", "checksums", "wait"])

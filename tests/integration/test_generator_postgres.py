@@ -47,8 +47,8 @@ def settings():
 def test_migrate_is_idempotent_and_stepwise(settings) -> None:
     assert migrate.migrate(settings.pg, target=1) == [1]
     assert migrate.migrate(settings.pg, target=1) == []
-    assert migrate.migrate(settings.pg) == [2]
-    assert [done for _, _, done in migrate.status(settings.pg)] == [True, True]
+    assert migrate.migrate(settings.pg) == [2, 3]
+    assert [done for _, _, done in migrate.status(settings.pg)] == [True, True, True]
 
 
 def test_seed_backfill_and_resume(settings) -> None:

@@ -821,6 +821,8 @@ class Simulation:
         # Pricing team: selling-price moves on a few SKUs, rare MRP revisions (SCD2 history downstream).
         for product in world.products.values():
             roll = rng.random()
+            if product.real_price:
+                continue  # its price follows real Open Prices observations (qc realdata sync)
             if roll < 0.003:
                 product.mrp = money(int(float(product.mrp) * float(rng.uniform(1.05, 1.12))) + 1)
                 product.selling_price = min(product.selling_price, product.mrp)

@@ -44,6 +44,10 @@ sleep 5
 wait "$GENERATOR"
 cat reports/generator.json
 
+step "real public data: migration V003 + Open Prices sample (real observations, bundled for determinism)"
+qc realdata sync --fixtures bundled --report /reports/realdata.json > /dev/null
+python3 -c "import json; s = json.load(open('reports/realdata.json')); print({k: s.get(k) for k in ('prices_inserted', 'products_inserted', 'locations_inserted', 'catalogue_linked', 'catalogue_price_updates', 'cursor_after')})"
+
 step "exact reconciliation"
 qc reconcile --mode exact --timeout 1800 --report /reports/reconcile-1.json
 

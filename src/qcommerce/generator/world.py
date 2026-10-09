@@ -17,6 +17,7 @@ import numpy as np
 
 from qcommerce.generator.ops import Txn
 from qcommerce.generator.reference import CATEGORIES, CITIES, NEIGHBOURHOODS, VEHICLES, CategorySpec
+from qcommerce.realdata.catalogue import RealProduct, load_snapshot
 from qcommerce.settings import GeneratorSettings
 
 CENT = Decimal("0.01")
@@ -96,6 +97,9 @@ class Product:
     selling_price: Decimal
     is_active: bool
     popularity: float
+    # True when the selling price is a real Open Prices INR shelf price (`price_source`, V003);
+    # the simulated pricing team leaves those alone.
+    real_price: bool = False
 
 
 @dataclass
@@ -308,25 +312,41 @@ def build_world(cfg: GeneratorSettings, start: datetime) -> tuple[World, list[Tx
     txn = Txn(created, "seed:products")
     product_id = 0
     seen_names: set[str] = set()
+    # Real Open Food Facts products (sold in India) fill each category first; the rest of the
+    # catalogue - and every category Open Food Facts doesn't cover (fresh produce, household, care) -
+    # is simulated. Real SKUs are ``OFF-<barcode>`` so `qc realdata sync` can link and price them.
+    real_by_category: dict[str, list[RealProduct]] = {}
+    if cfg.real_catalogue:
+        for real in load_snapshot():
+            real_by_category.setdefault(real.category, []).append(real)
     for category in world.categories.values():
         spec = category.spec
+        reals = list(real_by_category.get(spec.name, []))
         for _ in range(int(per_category[category.category_id - 1])):
-            for _attempt in range(20):
-                brand = spec.brands[int(rng.integers(len(spec.brands)))]
-                item = spec.items[int(rng.integers(len(spec.items)))]
-                unit = spec.units[int(rng.integers(len(spec.units)))]
-                name = f"{brand} {item} {unit}"
+            sku = None
+            while reals:
+                real = reals.pop(0)
+                name = real.name if real.name not in seen_names else f"{real.name} {real.quantity}"
                 if name not in seen_names:
+                    brand, unit, sku = real.brand, real.quantity, f"OFF-{real.code}"
                     break
-            else:
-                continue
+            if sku is None:
+                for _attempt in range(20):
+                    brand = spec.brands[int(rng.integers(len(spec.brands)))]
+                    item = spec.items[int(rng.integers(len(spec.items)))]
+                    unit = spec.units[int(rng.integers(len(spec.units)))]
+                    name = f"{brand} {item} {unit}"
+                    if name not in seen_names:
+                        break
+                else:
+                    continue
             seen_names.add(name)
             product_id += 1
             mrp = money(int(rng.uniform(*spec.price_range)))
             selling = money(max(1, int(float(mrp) * float(rng.uniform(0.78, 1.0)))))
             product = Product(
                 product_id,
-                f"SKU-{product_id:05d}",
+                sku or f"SKU-{product_id:05d}",
                 name,
                 brand,
                 category.category_id,
@@ -542,11 +562,18 @@ def load_world(conn: Any, cfg: GeneratorSettings) -> World:
     specs = {spec.name: spec for spec in CATEGORIES}
     for category_id, name in rows("SELECT category_id, name FROM commerce.categories ORDER BY category_id"):
         world.categories[category_id] = Category(category_id, specs[name])
+    has_price_source = conn.execute(
+        "SELECT 1 FROM information_schema.columns WHERE table_schema = 'commerce' AND table_name = 'products' "
+        "AND column_name = 'price_source'"
+    ).fetchone()
+    price_source = "price_source = 'open_prices'" if has_price_source else "false"
     for r in rows(
-        "SELECT product_id, sku, name, brand, category_id, unit, mrp, selling_price, is_active "
-        "FROM commerce.products ORDER BY product_id"
+        "SELECT product_id, sku, name, brand, category_id, unit, mrp, selling_price, is_active, "
+        f"{price_source} FROM commerce.products ORDER BY product_id"
     ):
-        world.products[r[0]] = Product(*r, popularity=_product_popularity(cfg.seed, r[0]))
+        world.products[r[0]] = Product(
+            *r[:9], popularity=_product_popularity(cfg.seed, r[0]), real_price=r[9]
+        )
     for customer_id, city_id, signup_at in rows(
         "SELECT customer_id, city_id, signup_at FROM commerce.customers ORDER BY customer_id"
     ):
