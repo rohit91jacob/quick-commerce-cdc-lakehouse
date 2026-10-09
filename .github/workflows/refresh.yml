@@ -1,0 +1,160 @@
+name: refresh
+
+# Every 4 hours: resume the stack from its persisted volumes, load new REAL price observations,
+# simulate the store since the last run, reconcile, rebuild dbt and publish the results site.
+# No credentials are needed (QC_DATA_GOV_IN_API_KEY is optional and enables Agmarknet).
+on:
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      fresh:
+        description: Ignore the persisted state and rebuild everything from scratch
+        type: boolean
+        default: false
+
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  COMPOSE_PROJECT_NAME: qc
+  VOLUMES: oltp-data platform-data kafka-data s3-data writer-checkpoints
+  ARCHIVE_IMAGE: debian:bookworm-slim
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      actions: write # prune superseded state caches
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+      - name: build the app image (layer cache)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: app
+          tags: qcommerce-app:local
+          load: true
+          cache-from: type=gha,scope=app
+          cache-to: type=gha,mode=max,scope=app
+      - name: build the writer image (layer cache)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/Dockerfile
+          target: writer
+          tags: qcommerce-writer:local
+          load: true
+          cache-from: type=gha,scope=writer
+          cache-to: type=gha,mode=max,scope=writer
+
+      - name: restore persisted state
+        id: state
+        if: ${{ !inputs.fresh }}
+        uses: actions/cache/restore@v6
+        with:
+          path: state
+          key: qc-state-${{ github.run_id }}
+          restore-keys: qc-state-
+      - name: load volumes
+        id: volumes
+        run: |
+          fresh=1
+          if [ -n "${{ steps.state.outputs.cache-matched-key }}" ] && [ -f state/oltp-data.tgz ]; then
+            for v in $VOLUMES; do
+              docker volume create "${COMPOSE_PROJECT_NAME}_$v" > /dev/null
+              docker run --rm -v "${COMPOSE_PROJECT_NAME}_$v:/v" -v "$PWD/state:/s:ro" "$ARCHIVE_IMAGE" \
+                tar -C /v -xzf "/s/$v.tgz"
+            done
+            fresh=0
+          fi
+          echo "restored from: ${{ steps.state.outputs.cache-matched-key || 'nothing (fresh start)' }}"
+          du -sh state 2>/dev/null || true
+          echo "fresh=$fresh" >> "$GITHUB_OUTPUT"
+
+      - name: refresh
+        env:
+          QC_FRESH: ${{ steps.volumes.outputs.fresh }}
+          QC_DATA_GOV_IN_API_KEY: ${{ secrets.QC_DATA_GOV_IN_API_KEY }}
+        run: ./scripts/refresh.sh
+
+      - name: archive volumes
+        run: |
+          rm -rf state && mkdir state
+          for v in $VOLUMES; do
+            docker run --rm -v "${COMPOSE_PROJECT_NAME}_$v:/v:ro" -v "$PWD/state:/s" "$ARCHIVE_IMAGE" \
+              tar -C /v -czf "/s/$v.tgz" .
+          done
+          du -sh state/*
+      - name: save state
+        uses: actions/cache/save@v6
+        with:
+          path: state
+          key: qc-state-${{ github.run_id }}
+      - name: prune superseded state caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key qc-state- --limit 100 --json id,key \
+            --jq '.[] | select(.key != "qc-state-${{ github.run_id }}") | .id' |
+            while read -r id; do gh cache delete "$id" --repo "$GITHUB_REPOSITORY"; done
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: reports/site
+      - name: diagnostics
+        if: failure()
+        run: |
+          docker compose logs --no-color --tail=300 > reports/compose.log 2>&1 || true
+          tail -n 200 reports/compose.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: refresh-reports
+          path: |
+            reports/*.json
+            reports/compose.log
+          if-no-files-found: ignore
+
+  deploy:
+    needs: refresh
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+
+  alert:
+    needs: [refresh, deploy]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const title = "Scheduled refresh is failing";
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const open = await github.paginate(github.rest.issues.listForRepo, { ...context.repo, state: "open" });
+            const existing = open.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body: `Failed again: ${run}` });
+            } else {
+              await github.rest.issues.create({ ...context.repo, title,
+                body: `The 4-hourly refresh failed: ${run}\n\nSee docs/runbook.md ("Scheduled refresh"). Close this issue once a run is green.` });
+            }
