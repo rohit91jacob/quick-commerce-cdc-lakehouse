@@ -87,6 +87,37 @@ Causes: an unparseable envelope, an unknown op, or a missing LSN or key. After a
 
 Dagster `iceberg_maintenance` runs daily at 03:30 IST: `optimize`, `expire_snapshots(7d)`, `remove_orphan_files(7d)` on every bronze and silver table. Run it ad hoc with `$QC maintenance run`. Silver tombstone purge is opt-in (`--purge-tombstones-days N`). N must exceed the Kafka retention, so a replay can never resurrect a purged row.
 
+## Scheduled refresh (GitHub Actions)
+
+`refresh.yml` runs every 4 hours and publishes https://rohit91jacob.github.io/quick-commerce-cdc-lakehouse/.
+Each run restores the Docker volumes from the Actions cache, runs `scripts/refresh.sh`, archives the volumes
+back and deploys the site ([ADR 0008](adr/0008-refresh-state-persistence.md)).
+
+- **It failed.** A "Scheduled refresh is failing" issue is opened, or commented on, with the run link. The
+  `refresh-reports` artifact has `realdata.json`, `generator.json`, `reconcile.json` and the compose logs.
+  State is archived only after a successful run, so the next run starts from the last good state. Close
+  the issue once a run is green.
+- **"restored from: nothing (fresh start)".** The state cache was evicted, or `fresh` was ticked. The run
+  bootstraps (migrate, seed, register, 6 h simulated backfill) and re-fetches real prices: 14 days
+  globally, all of the INR history. The simulated order history restarts.
+- **Rebuild on purpose.** Use Run workflow with `fresh` ticked.
+- **Open Prices or Open Food Facts is down.** The sync retries with backoff, and then the run fails before
+  touching the lakehouse. Nothing is lost: the cursor only advances with committed pages.
+- **Schedules stopped.** `keepalive.yml` re-enables them on the 1st and 15th. If they're disabled anyway,
+  re-enable them in the Actions tab, or run `keepalive.yml` manually.
+- **Enable Agmarknet.** Add the repository secret `QC_DATA_GOV_IN_API_KEY` (free key from data.gov.in);
+  the next run fills `commerce.mandi_prices`.
+- **Refresh the real catalogue.** `qc realdata catalogue-snapshot` (about 5 minutes: Open Food Facts search
+  is rate-limited to 10 requests a minute and is sometimes overloaded), then commit the new snapshot.
+  Seeding uses the snapshot, so this only affects new stacks; existing stores keep their SKUs.
+
+Live sync, verified locally against the real APIs (2026-10-09, into a fresh database):
+
+| Run | Result |
+|---|---|
+| First (14-day global backfill + full INR history) | 83 pages, 8,122 observations (333 skipped as duplicates or invalid); 7,778 prices, 6,928 products and 503 shops inserted. 179 catalogue products linked to Open Food Facts, 159 repriced to their latest real INR price. |
+| Second, minutes later | 2 boundary rows re-read, all unchanged, both cursors unchanged, 0 catalogue updates (no CDC noise) |
+
 ## Pausing the workload
 
 `$QC generator pause` / `resume`. Exact reconciliation does this automatically and always resumes, even when it fails.

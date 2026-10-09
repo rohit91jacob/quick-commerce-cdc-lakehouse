@@ -1,16 +1,20 @@
 # quick-commerce-cdc-lakehouse
 
 [![CI](https://github.com/rohit91jacob/quick-commerce-cdc-lakehouse/actions/workflows/ci.yml/badge.svg)](https://github.com/rohit91jacob/quick-commerce-cdc-lakehouse/actions/workflows/ci.yml)
+[![refresh](https://github.com/rohit91jacob/quick-commerce-cdc-lakehouse/actions/workflows/refresh.yml/badge.svg)](https://github.com/rohit91jacob/quick-commerce-cdc-lakehouse/actions/workflows/refresh.yml)
+[![Live results](https://img.shields.io/badge/live%20results-GitHub%20Pages-2a78d6.svg)](https://rohit91jacob.github.io/quick-commerce-cdc-lakehouse/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](pyproject.toml)
 
 An end-to-end **change-data-capture lakehouse** for a 10-minute grocery delivery business (Blinkit / Zepto / Instacart style).
 
-1. A deterministic simulator runs the OLTP side: dark stores, catalogue, inventory, orders, riders, payments and refunds.
+1. The OLTP side mixes **real public data** and a deterministic simulator. Real: the product catalogue (Open Food Facts products sold in India) and shelf prices observed in real shops (Open Prices), loaded incrementally. Simulated: dark stores, inventory, customers, orders, riders, payments and refunds.
 2. Debezium streams every committed change from Postgres into Kafka.
 3. A Spark Structured Streaming job lands the changes in Apache Iceberg as an append-only change log (bronze) and a current-state mirror (silver).
 4. dbt on Trino builds analytics marts: funnel, delivery SLA, stock-outs and lost sales, baskets, cohorts, rider utilisation, promos.
 5. Dagster orchestrates dbt, table maintenance, reconciliation and health checks.
+
+**Live results, rebuilt every 4 hours:** https://rohit91jacob.github.io/quick-commerce-cdc-lakehouse/
 
 The pipeline is **provably correct**: a reconciliation job compares every table and column aggregate between Postgres and silver, and must match exactly. The CI e2e job checks this after a writer crash, after a full replay, and after table maintenance.
 
@@ -67,11 +71,26 @@ Python dependencies are locked in `uv.lock`.
 
 ## Data
 
-The data is **synthetic**, from a seeded generator: no external source, no licence constraints, no PII. Names are pseudonymous and all brands are fictional. The same seed and start time always produce the same transaction stream (`tests/unit/test_generator_engine.py`).
+### Real vs simulated
 
-The simulation has:
-- 2–5 cities, with dark stores that each have a catchment radius and picker capacity
-- about 320 SKUs in 13 categories, with Pareto popularity
+| Data | Source | Real? | How it arrives |
+|---|---|---|---|
+| Product catalogue (name, brand, pack size, category, Nutri-Score, barcode) | [Open Food Facts](https://world.openfoodfacts.org): products sold in India (GS1 India barcodes, or observed at an Indian shop) | **Real**. 319 products in the committed snapshot; they fill about 56% of the store's 321 SKUs. Categories Open Food Facts doesn't cover (fresh produce, meat, household, personal and baby care) are simulated | `qc realdata catalogue-snapshot` (committed, refreshed on demand); seeded as `OFF-<barcode>` SKUs |
+| Shelf prices | [Open Prices](https://prices.openfoodfacts.org): crowdsourced price tags and receipts from real shops worldwide (about 700 new observations a day) | **Real** | `qc realdata sync`, incremental by creation time, every 4 hours. New observations become real `INSERT`s in Postgres, so CDC carries real changes |
+| Store selling prices | the latest **real INR** shelf price per barcode | **Real** where one exists (about 50% of SKUs), otherwise simulated | the same sync turns new INR prices into `UPDATE`s of `commerce.products` |
+| Wholesale mandi prices (optional) | data.gov.in [Agmarknet](https://data.gov.in) daily prices | **Real**, off by default | set `QC_DATA_GOV_IN_API_KEY` (free key; see below) |
+| Dark stores, customers, addresses, inventory, orders, riders, payments, refunds | seeded generator | **Simulated**: real quick-commerce orders are not public | `qc generator run`; each refresh simulates the time since the last order |
+
+Indian coverage on Open Prices is thin (about 400 INR observations in total, a few a day), so the global price stream is kept as its own subject area (`market_*` tables, multi-currency marts) rather than being converted into rupees. Indian observations get a dedicated full-history stream, which is what prices the store.
+
+Licences: Open Food Facts and Open Prices data are under the [Open Database License 1.0](https://opendatacommons.org/licenses/odbl/1-0/), (c) their contributors; Agmarknet data is under the Government Open Data License - India. The repo commits only the catalogue snapshot and two small Open Prices pages used by tests (`src/qcommerce/realdata/fixtures`), with attribution.
+
+**Enabling Agmarknet.** Sign up at https://data.gov.in, copy the API key from *My Account*, and add it as the repository secret `QC_DATA_GOV_IN_API_KEY`, or export it locally. The refresh then upserts the day's mandi prices into `commerce.mandi_prices`. Without the key the step is skipped and logged.
+
+### The simulation
+
+- 2-5 cities, with dark stores that each have a catchment radius and picker capacity
+- about 320 SKUs in 13 categories (real where possible, see above), with Pareto popularity
 - customers with order propensities and churn, which yields cohort retention
 - diurnal and weekly demand curves, festival spikes (Diwali, New Year's Eve...) and evening rain that raises demand and slows riders
 - inventory depletion, restocks twice a day, stock-outs and delisting/relisting of SKUs
@@ -79,17 +98,21 @@ The simulation has:
 - UPI, card, wallet and COD payments with failures, and refunds for cancellations, missing items and late deliveries
 - rider shifts with assignment queues, and a 10-minute promise (15 in rain)
 
-**Refresh cadence.** In live mode the generator writes in wall-clock time (`--rate-multiplier` scales demand) and `--backfill-hours` simulates history first. The writer triggers every 10–15 s (each micro-batch then takes seconds to minutes; see limitations), and dbt gold refreshes every 15 minutes.
+The same seed, catalogue snapshot and start time always produce the same transaction stream (`tests/unit/test_generator_engine.py`).
+
+**Refresh cadence.**
+- The hosted pipeline (`refresh.yml`) runs every 4 hours. Each run resumes the stack, loads the new real observations, simulates the hours since the last order, reconciles, rebuilds dbt and republishes the site.
+- Locally, the generator can run in wall-clock time (`--live-minutes -1`, `--rate-multiplier` scales demand), with `--backfill-hours` to simulate history first. The writer triggers every 10-15 s (each micro-batch then takes seconds to minutes; see limitations), and Dagster refreshes dbt gold every 15 minutes.
 
 ## Data model
 
 | Layer | Where | Grain / key |
 |---|---|---|
-| OLTP | Postgres `commerce.*` (16 business tables) | primary keys; composite for `inventory (store_id, product_id)` |
+| OLTP | Postgres `commerce.*` (16 simulated-business tables + 4 real market-data tables) | primary keys; composite for `inventory (store_id, product_id)` and `mandi_prices` |
 | Bronze | `lakehouse.bronze.<table>` | one row per change event, unique on (PK, `_lsn`, `_op`) |
 | Silver | `lakehouse.silver.<table>` | one row per PK, current state, deletes as tombstones (`_is_deleted`) |
 | Staging | `lakehouse.staging.stg_*` (views) | live silver rows; `*__changes` views over bronze |
-| Gold | `lakehouse.gold.*` | dims (incl. SCD2 price and store history from the change log), facts (incremental), 8 marts |
+| Gold | `lakehouse.gold.*` | dims (incl. SCD2 price and store history from the change log), facts (incremental), 8 store marts + 5 real-price marts (price changes, category price index, cross-shop dispersion, volatility, catalogue coverage) |
 
 The full column-level description is in **[docs/data_dictionary.md](docs/data_dictionary.md)**. How duplicates, ordering, deletes and schema changes are handled is in **[docs/cdc_semantics.md](docs/cdc_semantics.md)**.
 
@@ -184,6 +207,9 @@ Every component reads `QC_*` environment variables (`src/qcommerce/settings.py`)
 | `QC_*_HOST_PORT` | 5432 / 8083 / 8080 / 9405 / 3000 | host ports published by compose |
 | `QC_ALERT_WEBHOOK_URL` | unset | Dagster run-failure alerts are POSTed here |
 | `QC_LOG_LEVEL`, `DBT_TARGET` | `INFO`, `dev` | logging (JSON lines) and the dbt target (`ci` in the e2e test) |
+| `QC_GEN_REAL_CATALOGUE` | `true` | seed real Open Food Facts products where the snapshot has them |
+| `QC_DATA_GOV_IN_API_KEY` | unset | enables Agmarknet mandi prices (optional) |
+| `QC_CATCH_UP_HOURS` | `6` | most hours a refresh simulates since the last order (`scripts/refresh.sh`) |
 
 ## Testing & CI
 
@@ -191,10 +217,10 @@ Every component reads `QC_*` environment variables (`src/qcommerce/settings.py`)
 |---|---|---|
 | Unit | `python -m pytest tests/unit` | generator invariants (replayed into an in-memory relational model: keys, stock ≥ 0, state machine, money adds up, determinism, deletes present), Connect-schema → Spark type mapping, MERGE SQL, reconciliation comparisons, metrics, CLI |
 | Spark | `python -m pytest tests/spark` | the real `foreachBatch` against a local Iceberg catalog: snapshot + streaming, duplicates and full replay, stale and out-of-order events, delete-before-insert, re-insert after delete (composite key), schema evolution, mixed schema versions in one batch, TOAST placeholders, TRUNCATE, dead letters |
-| Integration | `python -m pytest -m integration tests/integration` | migrations (stepwise, idempotent), seed, backfill and resume against Postgres |
+| Integration | `python -m pytest -m integration tests/integration` | migrations (stepwise, idempotent), seed, backfill and resume against Postgres; `realdata sync` on real fixture pages (incremental cursor, idempotent re-run, catalogue repriced to the latest real INR price) |
 | dbt | `dbt build` | 51 data tests (generic and custom: `non_negative`, `between`, `scd2_valid_intervals`; singular: totals add up, lines match subtotal, lifecycle order) plus a unit test of the SCD2 model |
 
-Locally all of these pass: 38 unit + integration tests, 12 Spark tests, and dbt `PASS=88`.
+Locally all of these pass: 44 unit + 3 integration tests, 12 Spark tests, `dbt parse` and Dagster definitions validation. Live `qc realdata sync` results against the real APIs are in the [runbook](docs/runbook.md#scheduled-refresh-github-actions).
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) has four jobs:
 
@@ -204,6 +230,15 @@ CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) has four jobs:
 | `unit` | unit + Spark tests on Java 21 |
 | `integration` | Postgres service container |
 | `e2e` | builds both images, then runs `scripts/e2e.sh` on the full Compose stack: workload with schema change → SIGKILL + restart of the writer → exact reconciliation → full replay with unchanged checksums → dbt build, freshness and docs → Dagster maintenance, reconciliation and health jobs → exact reconciliation again. Reports are uploaded as artifacts |
+
+Two more workflows run on a schedule:
+
+| Workflow | Schedule | What it does |
+|---|---|---|
+| [`refresh.yml`](.github/workflows/refresh.yml) | every 4 hours (`:17`), or **Run workflow** (optionally `fresh`) | Builds the images (layer cache) and restores the stack's Docker volumes from the Actions cache. Then runs `scripts/refresh.sh`: real-data sync, simulated catch-up, exact reconciliation, `dbt build` + freshness, Iceberg maintenance, results site, clean shutdown. Finally it archives the volumes back into the cache (superseded caches pruned) and deploys the site to GitHub Pages. A failed scheduled run opens, or comments on, a "Scheduled refresh is failing" issue |
+| [`keepalive.yml`](.github/workflows/keepalive.yml) | 1st and 15th of each month | Re-enables the scheduled workflows through the API, so GitHub's 60-day inactivity rule never disables them, with no dummy commits |
+
+No credentials are needed for any of this: both APIs are public, and the workflows use only the built-in `GITHUB_TOKEN`. The optional Agmarknet key is the only secret.
 
 Dependabot keeps uv, Docker and Actions dependencies current, and `.pre-commit-config.yaml` mirrors the lint job.
 
@@ -226,7 +261,8 @@ See the **[runbook](docs/runbook.md)** for slot problems, re-snapshots, schema c
 
 ```text
 ├── src/qcommerce/
-│   ├── db/migrations/        V001 schema + publication, V002 online schema change
+│   ├── db/migrations/        V001 schema + publication, V002 online schema change, V003 real market data
+│   ├── realdata/             Open Food Facts catalogue snapshot, Open Prices + Agmarknet clients, `sync`
 │   ├── generator/            reference data, demand curves, event-driven engine, Postgres sink, runner
 │   ├── cdc/connector.py      Debezium config, registration, incremental snapshots, slot lag
 │   ├── lakehouse/            Connect-schema decoding, batch survey/parse, Iceberg DDL + MERGEs, writer, metrics
@@ -234,12 +270,14 @@ See the **[runbook](docs/runbook.md)** for slot problems, re-snapshots, schema c
 │   ├── reconcile.py          exact / settled reconciliation with fences
 │   ├── maintenance.py        Iceberg maintenance via Trino
 │   ├── ops.py, checksums.py  health checks, table fingerprints
+│   ├── site.py               static results site (GitHub Pages)
 │   └── cli.py                `qc` command
 ├── dbt/                      staging → intermediate → gold (core + analytics), tests, macros
 ├── docker/                   multi-target Dockerfile (app, writer), jar fetcher with checksum verification
 ├── infra/                    Trino, platform DB, Dagster and SeaweedFS config
 ├── docker-compose.yml        full stack
 ├── scripts/e2e.sh            end-to-end test (CI)
+├── scripts/refresh.sh        scheduled refresh (GitHub Actions)
 ├── tests/                    unit, spark, integration
 └── docs/                     CDC semantics, data dictionary, runbook, ADRs
 ```
@@ -254,6 +292,8 @@ Key decisions are recorded as ADRs:
 - [SeaweedFS (MinIO OSS is archived)](docs/adr/0004-seaweedfs-object-storage.md)
 - [Tombstones + LSN guard](docs/adr/0005-tombstones-and-lsn-guard.md)
 - [Dagster](docs/adr/0006-dagster-orchestration.md)
+- [Real public data next to the simulation](docs/adr/0007-real-public-data.md)
+- [Refresh state persisted as Docker volume archives](docs/adr/0008-refresh-state-persistence.md)
 
 **Known limitations**
 
@@ -263,6 +303,9 @@ Key decisions are recorded as ADRs:
 - Settled-mode reconciliation assumes `updated_at` tracks commit time. That holds for OLTP traffic, but not during a synthetic backfill; use exact mode then.
 - Single-node Kafka, Connect, Trino and SeaweedFS with replication factor 1: the topology is for development and CI, not high availability.
 - Spark checkpoints sit on a container volume. In production they belong on durable shared storage.
+- The hosted refresh keeps state in the Actions cache, which is best-effort storage. If it is evicted, the next run starts fresh: the real price history is re-fetched (14 days globally, all of it for India), but the simulated order history restarts.
+- Real data is crowdsourced. Coverage, especially for India, depends on contributors, and Open Prices' API exposes no update feed, so edits to old observations aren't picked up.
+- Orders are simulated. The real-price share in `mart_basket_daily` uses each product's provenance as of today, not at order time.
 
 **Roadmap**
 
