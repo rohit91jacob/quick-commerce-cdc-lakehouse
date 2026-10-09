@@ -20,6 +20,11 @@ ALTER TABLE commerce.products
     ADD COLUMN nutriscore_grade  text,
     ADD COLUMN image_url         text;
 
+-- A column added WITH a default is filled in place by Postgres, without writing any WAL for the
+-- existing rows, so CDC would never carry the defaults and silver would hold NULLs. Touching every
+-- row (small table) emits one update per product with the new columns populated.
+UPDATE commerce.products SET updated_at = now();
+
 CREATE TABLE commerce.market_locations (
     location_id   integer PRIMARY KEY,
     osm_name      text,

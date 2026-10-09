@@ -87,3 +87,13 @@ A micro-batch commits tables one by one, in dependency order: parents before chi
 4. profiles every table on both sides in one `REPEATABLE READ` snapshot: row count; then per column the non-null count, sums (integers, decimals), total text length, true-count and min/max timestamps. Floating-point sums are compared with a 1e-6 relative tolerance
 
 `--mode settled` skips the pause. It compares only rows with `updated_at` older than `now - settle`, after a single fence.
+
+## Columns added with a default
+
+`ALTER TABLE ... ADD COLUMN ... DEFAULT x` fills existing rows in place, without writing WAL for them.
+Debezium therefore never emits those values, and silver keeps NULL for every row untouched since the
+change, which exact reconciliation flags. Migration V003 adds defaulted provenance columns to
+`products` and then touches every row (`UPDATE ... SET updated_at = now()`), so each product is
+re-emitted with the new columns populated. Large tables would use a Debezium incremental snapshot
+(`qc cdc snapshot --tables commerce.<table>`) instead.
+
