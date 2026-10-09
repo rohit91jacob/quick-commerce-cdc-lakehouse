@@ -59,3 +59,55 @@ models:
     columns:
       - name: promo_code
         tests: [unique, not_null]
+
+  - name: mart_price_changes
+    description: REAL. Shelf-price changes between consecutive Open Prices observations of a product at a shop.
+    columns:
+      - name: price_id
+        tests: [unique, not_null]
+      - name: previous_price
+        tests: [not_null, non_negative]
+      - name: currency
+        tests: [not_null]
+
+  - name: mart_category_price_index_daily
+    description: REAL. Jevons price index (first observation = 100) per category, currency and day.
+    tests:
+      - unique_combination:
+          arguments: {combination_of_columns: [category_tag, currency, observed_on]}
+    columns:
+      - name: price_index
+        tests: [not_null, non_negative]
+
+  - name: mart_store_price_dispersion
+    description: REAL. Price spread of one product across shops in the same week (at least two shops).
+    tests:
+      - unique_combination:
+          arguments: {combination_of_columns: [product_code, currency, week_start]}
+    columns:
+      - name: shops
+        tests:
+          - between: {arguments: {min_value: 2, max_value: 1000000}}
+      - name: max_to_min_ratio
+        tests: [non_negative]
+
+  - name: mart_price_volatility
+    description: REAL. Change frequency and size per product-shop price series, with a volatility flag.
+    tests:
+      - unique_combination:
+          arguments: {combination_of_columns: [product_code, location_id, currency]}
+    columns:
+      - name: is_volatile
+        tests: [not_null]
+      - name: max_abs_change_pct
+        tests: [non_negative]
+
+  - name: mart_catalogue_coverage
+    description: How much of the store catalogue is real (Open Food Facts products, Open Prices INR prices).
+    columns:
+      - name: category_name
+        tests: [unique, not_null]
+      - name: real_product_share
+        tests:
+          - between: {arguments: {min_value: 0, max_value: 1}}
+

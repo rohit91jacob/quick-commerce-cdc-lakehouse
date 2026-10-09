@@ -44,6 +44,20 @@ sources:
         description: One payment per order.
       - name: refunds
         description: Refunds (cancellations, missing items, late deliveries).
+      - name: market_locations
+        description: REAL. Shops where Open Prices observations were made (OpenStreetMap places).
+        freshness: null
+      - name: market_products
+        description: REAL. Open Food Facts products referenced by Open Prices observations.
+        freshness: null
+      - name: market_prices
+        description: REAL. Crowdsourced shelf-price observations from Open Prices (ODbL), loaded incrementally.
+        freshness:
+          warn_after: {count: 12, period: hour}
+          error_after: {count: 3, period: day}
+      - name: mandi_prices
+        description: REAL (optional). Agmarknet daily wholesale mandi prices; empty unless a data.gov.in key is set.
+        freshness: null
 
   - name: bronze
     description: Append-only CDC change logs (one row per change event).

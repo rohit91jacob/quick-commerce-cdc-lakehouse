@@ -25,3 +25,23 @@ models:
     description: Every captured version of a product row (deduplicated per key, LSN and op).
   - name: stg_inventory__changes
     description: Inventory change log including deletes (delisted SKUs).
+  - name: stg_market_prices
+    description: REAL. Open Prices shelf-price observations (current state).
+    columns:
+      - name: price_id
+        tests: [unique, not_null]
+      - name: price
+        tests: [not_null, non_negative]
+  - name: stg_market_products
+    description: REAL. Open Food Facts products referenced by price observations.
+    columns:
+      - name: market_product_id
+        tests: [unique, not_null]
+  - name: stg_market_locations
+    description: REAL. Shops (OpenStreetMap places) where prices were observed.
+    columns:
+      - name: location_id
+        tests: [unique, not_null]
+  - name: stg_mandi_prices
+    description: REAL (optional). Agmarknet daily wholesale prices (rupees per quintal).
+
