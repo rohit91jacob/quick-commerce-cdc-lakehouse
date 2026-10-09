@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -101,8 +102,8 @@ def collect(settings: Settings) -> dict[str, Any]:
 def _fmt(value: Any, digits: int = 2) -> str:
     if value is None:
         return "–"
-    if isinstance(value, float):
-        return f"{value:,.{digits}f}"
+    if isinstance(value, (float, Decimal)):
+        return f"{float(value):,.{digits}f}"
     return escape(str(value))
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 
 from qcommerce.site import render
 
@@ -30,7 +31,7 @@ def test_render_labels_sources_and_formats_moves() -> None:
         "india": [["Parle-G", "Parle", "Delhi", 10.0, date(2026, 10, 7)]],
         "coverage": [["Snacks & Munchies", 32, 32, 30]],
         "ops": [[1500, 0.81, 14.2]],
-        "basket": [[412.5, 0.48, 0.55]],
+        "basket": [[Decimal("868.109780"), 0.48, 0.55]],
     }
     html = render(data)
     assert "<script" not in html
@@ -39,6 +40,7 @@ def test_render_labels_sources_and_formats_moves() -> None:
     assert "▲ +7.1%" in html
     assert "Parle-G" in html and "₹10.00" in html
     assert "Open Database License" in html
+    assert "₹868.11" in html
 
 
 def test_render_handles_an_empty_lake() -> None:
