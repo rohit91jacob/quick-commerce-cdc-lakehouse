@@ -5,7 +5,7 @@
 ARG SPARK_IMAGE=apache/spark:4.1.3-scala2.13-java21-python3-ubuntu
 
 # ------------------------------------------------------------------------------------------------ app
-FROM python:3.12-slim-bookworm AS app
+FROM python:3.14-slim-bookworm AS app
 ENV PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 COPY --from=ghcr.io/astral-sh/uv:0.11.16 /uv /usr/local/bin/uv
 WORKDIR /opt/qcommerce
