@@ -155,7 +155,7 @@ services:
     restart: "no"
 
   trino:
-    image: trinodb/trino:483
+    image: trinodb/trino:484
     depends_on:
       platform-db: {condition: service_healthy}
       seaweedfs: {condition: service_healthy}
