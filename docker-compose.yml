@@ -106,7 +106,7 @@ services:
     mem_limit: 1g
 
   connect:
-    image: quay.io/debezium/connect:3.7.0.Final
+    image: quay.io/debezium/connect:3.7.1.Final
     depends_on:
       kafka: {condition: service_healthy}
       postgres: {condition: service_healthy}
