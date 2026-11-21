@@ -5,12 +5,24 @@ updates:
     schedule: {interval: weekly}
     groups:
       python: {patterns: ["*"]}
+    ignore:
+      # the Iceberg Spark runtime and writer image are built for Spark 4.1
+      - dependency-name: pyspark
+        versions: [">=4.2"]
   - package-ecosystem: docker
     directory: /docker
     schedule: {interval: weekly}
+    ignore:
+      # Python 3.13+ base images: the pinned libraries are not on 3.13+ yet; take 3.12 patches only
+      - dependency-name: python
+        versions: [">=3.13"]
   - package-ecosystem: docker-compose
     directory: /
     schedule: {interval: weekly}
+    ignore:
+      # Postgres 18 is a major upgrade of the OLTP + replication slot; do it deliberately
+      - dependency-name: postgres
+        versions: [">=18"]
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
