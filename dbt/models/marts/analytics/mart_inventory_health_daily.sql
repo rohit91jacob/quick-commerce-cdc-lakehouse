@@ -20,10 +20,14 @@ stockouts as (
         {{ local_date('s.started_at') }} as stockout_date,
         s.stockout_minutes,
         s.is_ongoing,
+        inv.product_id is not null as is_listed,
         r.units_sold / nullif(r.observed_minutes, 0) as units_per_minute,
         r.avg_unit_price
     from {{ ref('int_inventory_stockout_periods') }} s
     left join sell_rate r on r.store_id = s.store_id and r.product_id = s.product_id
+    -- Products delisted since the stock-out are no longer in the catalogue, so they can't count
+    -- towards a rate whose denominator is the current catalogue (that let the rate exceed 1).
+    left join {{ ref('stg_inventory') }} inv on inv.store_id = s.store_id and inv.product_id = s.product_id
 ),
 
 removed as (
@@ -40,6 +44,7 @@ daily as (
         stockout_date as activity_date,
         count(*) as stockout_events,
         count(distinct product_id) as skus_stocked_out,
+        count(distinct case when is_listed then product_id end) as listed_skus_stocked_out,
         count_if(is_ongoing) as stockouts_ongoing,
         sum(stockout_minutes) as stockout_minutes,
         sum(stockout_minutes * coalesce(units_per_minute, 0)) as estimated_lost_units,
@@ -65,7 +70,7 @@ select
     d.skus_stocked_out,
     d.stockouts_ongoing,
     d.stockout_minutes,
-    cast(d.skus_stocked_out as double) / nullif(c.skus_listed, 0) as stockout_rate,
+    cast(d.listed_skus_stocked_out as double) / nullif(c.skus_listed, 0) as stockout_rate,
     d.estimated_lost_units,
     cast(d.estimated_lost_sales as decimal(14, 2)) as estimated_lost_sales,
     coalesce(r.lines_removed_at_picking, 0) as lines_removed_at_picking,

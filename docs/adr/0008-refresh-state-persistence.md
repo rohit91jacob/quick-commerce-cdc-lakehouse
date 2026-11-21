@@ -29,7 +29,11 @@ would have to re-snapshot or would lose changes.
   occupies the repository's 10 GB cache budget.
 - **Archive only on success.** State is archived only after a successful refresh. A failed run leaves
   the previous good state in place.
-- **Fresh start fallback.** `fresh` (manual input) or a cache miss starts from scratch: migrate, seed,
+- **Stale-state guard.** Because state is archived only on success, a run of failures freezes it.
+  Once the saved state is 6 days old (`QC_MAX_STATE_AGE_DAYS`) it is discarded, because Kafka's 7-day
+  retention would already have deleted messages the writer's checkpoint still points at. (Added after
+  a week of failed runs in Nov 2026 ended with the writer failing on out-of-range offsets.)
+- **Fresh start fallback.** `fresh` (manual input), a cache miss or stale state starts from scratch: migrate, seed,
   register the connector, then a 6-hour simulated backfill. Real price history is re-fetched by the
   normal sync.
 - **Bound growth.**

@@ -74,7 +74,7 @@ Current state, one row per primary key, merge-on-read Iceberg v2. Holds the busi
 | `fct_order_items` | surviving order line | quantity, prices, substitution flag; incremental by order |
 | `mart_order_funnel_daily` | store × IST day | orders per stage, cancellations by reason, placed→delivered rate |
 | `mart_delivery_sla_hourly` | store × IST day × hour | P50/P90 delivery minutes, share within the promise, stage averages |
-| `mart_inventory_health_daily` | store × IST day | stock-out events, stock-out rate, estimated lost units and sales, lines removed at picking |
+| `mart_inventory_health_daily` | store × IST day | stock-out events, stock-out rate (share of currently listed SKUs that stocked out that day), estimated lost units and sales, lines removed at picking |
 | `mart_basket_daily` | city × IST day | GMV, discounts, refunds, net revenue, AOV, lines and units per order, `real_product_value_share` and `real_price_value_share` (share of line value on real products / at real prices) |
 | `mart_category_mix_daily` | category × IST day | units, revenue, revenue share |
 | `mart_customer_retention_weekly` | cohort week × week number | cohort size, active customers, retention rate |

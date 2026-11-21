@@ -69,6 +69,17 @@ jobs:
         id: volumes
         run: |
           fresh=1
+          # Kafka keeps 7 days of messages. State older than that can't be replayed consistently
+          # (the writer's checkpoint would point at deleted offsets), so rebuild from scratch instead.
+          if [ -f state/oltp-data.tgz ]; then
+            saved_at=$(cat state/saved_at 2>/dev/null || stat -c %Y state/oltp-data.tgz)
+            age_days=$(( ( $(date +%s) - saved_at ) / 86400 ))
+            echo "persisted state is ${age_days} day(s) old"
+            if [ "$age_days" -ge "${QC_MAX_STATE_AGE_DAYS:-6}" ]; then
+              echo "::warning::Persisted state is ${age_days} days old, past Kafka's 7-day retention; rebuilding from scratch."
+              rm -rf state
+            fi
+          fi
           if [ -n "${{ steps.state.outputs.cache-matched-key }}" ] && [ -f state/oltp-data.tgz ]; then
             for v in $VOLUMES; do
               docker volume create "${COMPOSE_PROJECT_NAME}_$v" > /dev/null
@@ -90,6 +101,7 @@ jobs:
       - name: archive volumes
         run: |
           rm -rf state && mkdir state
+          date +%s > state/saved_at
           for v in $VOLUMES; do
             docker run --rm -v "${COMPOSE_PROJECT_NAME}_$v:/v:ro" -v "$PWD/state:/s" "$ARCHIVE_IMAGE" \
               tar -C /v -czf "/s/$v.tgz" .
